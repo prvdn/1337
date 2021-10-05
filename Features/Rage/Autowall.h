@@ -66,7 +66,7 @@ private:
 		int m_penetration_count;
 	};
 
-	void ScaleDamage(IBasePlayer* e, CCSWeaponInfo* weapon_info, int hitgroup, float& current_damage);
+	void ScaleDamage(IBasePlayer* e, CCSWeaponInfo* weaponData, int hitgroup, float& currentDamage);
 	bool VectortoVectorVisible(Vector src, Vector point);
 	bool HandleBulletPenetration(CCSWeaponInfo* info, FireBulletData_t& data, bool extracheck = false, Vector point = Vector(0, 0, 0));
 	bool BreakableEntity(IBasePlayer* entity);

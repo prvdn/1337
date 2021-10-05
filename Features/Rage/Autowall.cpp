@@ -164,85 +164,179 @@ bool CAutoWall::IsArmored(IBasePlayer* player, int hitgroup)
 	return false;
 }
 
-void CAutoWall::ScaleDamage(IBasePlayer* player, CCSWeaponInfo* weapon_info, int hitgroup, float& damage)
+void CAutoWall::ScaleDamage(IBasePlayer* e, CCSWeaponInfo* weaponData, int hitgroup, float& currentDamage)
 {
-	if (!player)
+	if (!e->IsPlayer())
 		return;
 
-	auto new_damage = damage;
+	//auto is_armored = [&]()->bool
+	//{
+	//	auto has_helmet = e->HasHelmet();
+	//	auto armor_value = e->GetArmor();
 
-	const auto is_zeus = csgo->weapon->GetItemDefinitionIndex() == weapon_taser;
+	//	if (armor_value > 0)
+	//	{
+	//		switch (hitgroup)
+	//		{
+	//		case HITGROUP_GENERIC:
+	//		case HITGROUP_CHEST:
+	//		case HITGROUP_STOMACH:
+	//		case HITGROUP_LEFTARM:
+	//		case HITGROUP_RIGHTARM:
+	//		case HITGROUP_LEFTLEG:
+	//		case HITGROUP_RIGHTLEG:
+	//		case HITGROUP_GEAR:
+	//		case HITGROUP_HEAD:
+	//			return has_helmet || e->HeavyArmor();
 
-	static auto is_armored = [](IBasePlayer* player, int armor, int hitgroup) {
-		if (player && player->GetArmor() > 0)
-		{
-			if (player->HasHelmet() && hitgroup == HITGROUP_HEAD || (hitgroup >= HITGROUP_CHEST && hitgroup <= HITGROUP_RIGHTARM))
-				return true;
-		}
-		return false;
-	};
+	//		default:
+	//			return e->HeavyArmor();
+	//		}
+	//	}
 
-	if (!is_zeus) {
-		switch (hitgroup)
-		{
-		case HITGROUP_HEAD:
-			new_damage *= 4.f;
-			break;
-		case HITGROUP_STOMACH:
-			new_damage *= 1.25f;
-			break;
-		case HITGROUP_LEFTLEG:
-		case HITGROUP_RIGHTLEG:
-			new_damage *= .75f;
-			break;
-		default:
-			break;
-			/*4.0; 1
-			1.0; 2
-			1.25; 3
-			1.0; 4
-			1.0; 5
-			0.75; 6
-			0.75; 7
-			1.0; 8*/
-		}
-	}
-	else
-		new_damage *= 0.92f;
+	//	return false;
+	//};
 
-	auto weaponData = csgo->weapon->GetCSWpnData();
-	if (!weaponData)
-		return;
+	static auto mp_damage_scale_ct_head = interfaces.cvars->FindVar(str("mp_damage_scale_ct_head")); //-V807
+	static auto mp_damage_scale_t_head = interfaces.cvars->FindVar(str("mp_damage_scale_t_head"));
+	static auto mp_damage_scale_ct_body = interfaces.cvars->FindVar(str("mp_damage_scale_ct_body"));
+	static auto mp_damage_scale_t_body = interfaces.cvars->FindVar(str("mp_damage_scale_t_body"));
 
-	if (is_armored(player, player->GetArmor(), hitgroup))
+	auto head_scale = e->GetTeam() == 3 ? mp_damage_scale_ct_head->GetFloat() : mp_damage_scale_t_head->GetFloat();
+	auto body_scale = e->GetTeam() == 3 ? mp_damage_scale_ct_body->GetFloat() : mp_damage_scale_t_body->GetFloat();
+
+	auto armor_heavy = e->HeavyArmor();
+	auto armor_value = (float)e->GetArmor();
+
+	if (armor_heavy)
+		head_scale *= 0.5f;
+
+	switch (hitgroup)
 	{
-		float flHeavyRatio = 1.0f;
-		float flBonusRatio = 0.5f;
-		float flRatio = weaponData->m_flArmorRatio * 0.5f;
-		float flNewDamage;
-
-		if (!player->HeavyArmor())
-		{
-			flNewDamage = new_damage * flRatio;
-		}
-		else
-		{
-			flBonusRatio = 0.33f;
-			flRatio = weaponData->m_flArmorRatio * 0.5f;
-			flHeavyRatio = 0.33f;
-			flNewDamage = (new_damage * (flRatio * 0.5)) * 0.85f;
-		}
-
-		int iArmor = player->GetArmor();
-
-		if (((new_damage - flNewDamage) * (flBonusRatio * flHeavyRatio)) > iArmor)
-			flNewDamage = new_damage - (iArmor / flBonusRatio);
-
-		new_damage = flNewDamage;
+	case HITGROUP_HEAD:
+		currentDamage *= 4.0f * head_scale;
+		break;
+	case HITGROUP_STOMACH:
+		currentDamage *= 1.25f * body_scale;
+		break;
+	case HITGROUP_CHEST:
+	case HITGROUP_LEFTARM:
+	case HITGROUP_RIGHTARM:
+	case HITGROUP_GEAR:
+		currentDamage *= 1.0f * body_scale;
+		break;
+	case HITGROUP_LEFTLEG:
+	case HITGROUP_RIGHTLEG:
+		currentDamage *= 0.75f * body_scale;
+		break;
 	}
 
-	damage = new_damage;
+	if (CAutoWall::IsArmored(e,hitgroup))
+	{
+		auto armor_scale = 1.0f;
+		auto armor_ratio = weaponData->m_flArmorRatio * 0.5f;
+		auto armor_bonus_ratio = 0.5f;
+
+		if (armor_heavy)
+		{
+
+			armor_bonus_ratio = 0.5f;
+			armor_ratio = 0.33f;
+			armor_scale = 0.33f;
+		}
+
+		auto new_damage = currentDamage * armor_ratio;
+		auto estiminated_damage = (currentDamage - currentDamage * armor_ratio) * armor_scale * armor_bonus_ratio;
+
+		if (armor_heavy)
+			new_damage = new_damage * 0.85000002;
+
+		if (estiminated_damage > armor_value)
+			new_damage = currentDamage - armor_value / armor_bonus_ratio;
+
+		currentDamage = floorf(new_damage);
+	}
 }
+
+//void CAutoWall::ScaleDamage(IBasePlayer* player, CCSWeaponInfo* weapon_info, int hitgroup, float& damage)
+//{
+//	if (!player)
+//		return;
+//
+//	auto new_damage = damage;
+//
+//	const auto is_zeus = csgo->weapon->GetItemDefinitionIndex() == weapon_taser;
+//
+//	static auto is_armored = [](IBasePlayer* player, int armor, int hitgroup) {
+//		if (player && player->GetArmor() > 0)
+//		{
+//			if (player->HasHelmet() && hitgroup == HITGROUP_HEAD || (hitgroup >= HITGROUP_CHEST && hitgroup <= HITGROUP_RIGHTARM))
+//				return true;
+//		}
+//		return false;
+//	};
+//
+//	if (!is_zeus) {
+//		switch (hitgroup)
+//		{
+//		case HITGROUP_HEAD:
+//			new_damage *= 4.f;
+//			break;
+//		case HITGROUP_STOMACH:
+//			new_damage *= 1.25f;
+//			break;
+//		case HITGROUP_LEFTLEG:
+//		case HITGROUP_RIGHTLEG:
+//			new_damage *= .75f;
+//			break;
+//		default:
+//			break;
+//			/*4.0; 1
+//			1.0; 2
+//			1.25; 3
+//			1.0; 4
+//			1.0; 5
+//			0.75; 6
+//			0.75; 7
+//			1.0; 8*/
+//		}
+//	}
+//	else
+//		new_damage *= 0.92f;
+//
+//	auto weaponData = csgo->weapon->GetCSWpnData();
+//	if (!weaponData)
+//		return;
+//
+//	if (is_armored(player, player->GetArmor(), hitgroup))
+//	{
+//		float flHeavyRatio = 1.0f;
+//		float flBonusRatio = 0.5f;
+//		float flRatio = weaponData->m_flArmorRatio * 0.5f;
+//		float flNewDamage;
+//
+//		if (!player->HeavyArmor())
+//		{
+//			flNewDamage = new_damage * flRatio;
+//		}
+//		else
+//		{
+//			flBonusRatio = 0.33f;
+//			flRatio = weaponData->m_flArmorRatio * 0.5f;
+//			flHeavyRatio = 0.33f;
+//			flNewDamage = (new_damage * (flRatio * 0.5)) * 0.85f;
+//		}
+//
+//		int iArmor = player->GetArmor();
+//
+//		if (((new_damage - flNewDamage) * (flBonusRatio * flHeavyRatio)) > iArmor)
+//			flNewDamage = new_damage - (iArmor / flBonusRatio);
+//
+//		new_damage = flNewDamage;
+//	}
+//
+//	damage = new_damage;
+//}
 
 bool CAutoWall::VectortoVectorVisible(Vector src, Vector point) {
 

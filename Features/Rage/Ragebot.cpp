@@ -137,7 +137,7 @@ float CRagebot::GetHeadScale(IBasePlayer* player)
 //	Vector src, dst, sc1, sc2, fw1;
 //
 //	src = pBaseEntity->GetBonePos(bones, 8);
-//	Math::AngleVectors(Vector(0, g_Animfix->GetBackwardYaw(pBaseEntity) - 90.f, 0), &fw1);
+//	Math::AngleVectors(Vector(0, g_Resolver->GetBackwardYaw(pBaseEntity) - 90.f, 0), &fw1);
 //
 //	Vector left_side = src + (fw1 * 40);
 //	Vector right_side = src - (fw1 * 40);
@@ -378,15 +378,6 @@ uint8_t CRagebot::ScanMode(IBasePlayer* pEntity)
 		if (!weapon || !pEntity->isAlive() || !csgo->local->isAlive())
 			return ScanType::SCAN_DEFAULT;
 
-		if (weapon->IsZeus())
-			return ScanType::SCAN_FORCE_SAFEPOINT;
-
-		if(pEntity->GetWeapon()->IsZeus() || pEntity->GetWeapon()->IsKnife())
-			return ScanType::SCAN_SAFE_BAIM;
-
-		if(pEntity->GetGroundEntity() != 0)
-			return ScanType::SCAN_SAFE_BAIM;
-
 		if (g_Binds[bind_baim].active)
 			return ScanType::SCAN_SAFE_BAIM;
 
@@ -402,7 +393,7 @@ uint8_t CRagebot::ScanMode(IBasePlayer* pEntity)
 				return ScanType::SCAN_DEFAULT;
 		}
 
-		const int& missed_shots = csgo->maxmisses[pEntity->GetIndex()];
+		const int& missed_shots = csgo->actual_misses[pEntity->GetIndex()] + std::clamp(csgo->imaginary_misses[pEntity->GetIndex()] - 1, 0, INT_MAX);
 		if (current_settings.max_misses > 0 && missed_shots >= current_settings.max_misses)
 			return missed_shots == current_settings.max_misses ? ScanType::SCAN_FORCE_SAFEPOINT : ScanType::SCAN_SAFE_BAIM;
 
@@ -784,9 +775,9 @@ Vector CRagebot::HeadScan(animation* anims, int& hitbox, float min_dmg, int& i) 
 	memcpy(BoneMatrixInversed, anims->inversed_bones, sizeof(matrix[128]));
 
 	SetAnims(anims, BoneMatrix);
-	
-
-	min_dmg += 6;
+	int health = anims->player->GetHealth();
+	if (min_dmg > health)
+		min_dmg = health + 1;
 	hitbox = 0;
 
 	std::vector<CPoint> points = {};
@@ -805,14 +796,14 @@ Vector CRagebot::HeadScan(animation* anims, int& hitbox, float min_dmg, int& i) 
 				.center = Hitbox.second,
 				.hitbox = hitbox,
 				.damage = (float)damage,
-				.lethal = damage > 5,
+				.lethal = damage > health,
 				.safe = 2
 				});
 		}
 	}
 
 	auto scan_mode = ScanType::SCAN_FORCE_SAFEPOINT;
-	auto best_point = GetBestPoint(points, min_dmg, scan_mode);
+	auto best_point = GetBestPoint(points, dt_ready ? health / 2.f : health, scan_mode);
 
 	RestorePlayer(anims);
 	hitbox = best_point.hitbox;
@@ -834,8 +825,8 @@ Vector CRagebot::PrimaryScan(animation* anims, int& hitbox, float& simtime, floa
 
 	auto best_point = Vector(0, 0, 0);
 	auto health = anims->player->GetHealth();
-
-	min_dmg += 6;
+	if (min_dmg > health)
+		min_dmg = health + 1;
 
 	static const vector<int> hitboxes = {
 		CSGOHitboxID::Head,
@@ -873,7 +864,9 @@ Vector CRagebot::FullScan(animation* anims, int& hitbox, float& simtime, float& 
 	best_damage = -1;
 	SetAnims(anims, BoneMatrix);
 
-	min_dmg += 6;
+	int health = anims->player->GetHealth();
+	if (min_dmg > health)
+		min_dmg = health + 1;
 	auto hitboxes = GetHitboxesToScan(anims->player);
 
 	std::vector<CPoint> points;
@@ -887,7 +880,7 @@ Vector CRagebot::FullScan(animation* anims, int& hitbox, float& simtime, float& 
 					.center = Hitbox.second,
 					.hitbox = HitboxID,
 					.damage = (float)damage,
-					.lethal = damage > 5,
+					.lethal = damage > health,
 					.safe = (int)CanHitHitbox(csgo->local->GetEyePosition(), Hitbox.first, anims, HitboxID, anims->unresolved_bones)
 						+ (int)CanHitHitbox(csgo->local->GetEyePosition(), Hitbox.first, anims, HitboxID, BoneMatrixInversed)
 					});
@@ -895,7 +888,7 @@ Vector CRagebot::FullScan(animation* anims, int& hitbox, float& simtime, float& 
 	}
 
 	const auto& scan_mode = ScanMode(anims->player);
-	const auto& best_point = GetBestPoint(points, min_dmg, scan_mode);
+	const auto& best_point = GetBestPoint(points, dt_ready ? health / 2.f : health, scan_mode);
 
 	RestorePlayer(anims);
 	hitbox = best_point.hitbox;
@@ -1062,8 +1055,8 @@ bool HitTraces(float& final_chance, animation* _animation, const Vector position
 		return false;
 
 	// performance optimization.
-	if ((csgo->local->GetEyePosition() - position).Length2D() > info->m_flRange)
-		return false;
+	//if ((csgo->local->GetEyePosition() - position).Length2D() > info->m_flRange)
+	//	return false;
 
 	// setup calculation parameters.
 	const auto id = weapon->GetItemDefinitionIndex();
@@ -1101,14 +1094,14 @@ bool HitTraces(float& final_chance, animation* _animation, const Vector position
 		inaccuracy = std::get<0>(*seed) * weapon_inaccuracy;
 		spread_x = std::get<2>(*seed) * inaccuracy;
 		spread_y = std::get<1>(*seed) * inaccuracy;
-		total_spread = (forward + right * spread_x + up * spread_y).Normalize();
+		total_spread = (forward + right * spread_x + up * spread_y).NormalizeInPlace();
 
 		// calculate angle with spread applied.
 		Math::VectorAngles(total_spread, spread_angle);
 
 		// calculate end point of trace.
 		Math::AngleVectors(spread_angle, end);
-		end = start + end.Normalize() * info->m_flRange;
+		end = start + end.NormalizeInPlace() * info->m_flRange;
 
 		// did we hit the hitbox?
 		if (box != (int)CSGOHitboxID::LeftFoot && box != (int)CSGOHitboxID::RightFoot) {
@@ -1554,6 +1547,8 @@ void CRagebot::Run()
 		}
 		if (!pEntity->isAlive() || pEntity->GetHealth() <= 0 || pEntity->GetTeam() == csgo->local->GetTeam()) {
 			csgo->maxmisses[pEntity->EntIndex()] = 0;
+			csgo->actual_misses[pEntity->GetIndex()] = 0;
+			csgo->imaginary_misses[pEntity->GetIndex()] = 0;
 			continue;
 		}
 		if (pEntity->IsDormant() || pEntity->HasGunGameImmunity())
@@ -1722,7 +1717,7 @@ void CRagebot::Run()
 
 					// вот эту хуйню расскоменчивать когда надо тест анимфикса + сейфпоинтов, чтоб видеть куда рейдж стреляет
 
-
+					//DrawCapsule(best_anims->player, best_anims->unresolved_bones, color_t(255, 255, 255, 127));
 					/*DrawCapsule(best_anims->player, best_anims->right_side_bone, color_t(255, 35, 35, 127));
 					DrawCapsule(best_anims->player, best_anims->left_side_bone, color_t(35, 255, 35, 127));*/
 					g_Chams->AddHitmatrix(best_anims);
@@ -1756,14 +1751,14 @@ void CRagebot::Run()
 					interfaces.engine->SetViewAngles(csgo->cmd->viewangles);
 			}
 		}
-		auto max_tickbase_shift = (vars.ragebot.more_ticks && csgo->weapon->isSniper()) ? vars.ragebot.dt_tickammount : csgo->weapon->GetMaxTickbaseShift();
-		if (g_Binds[bind_double_tap].active && !g_Binds[bind_peek_assist].active && max_tickbase_shift >= 12) {
-			if (csgo->fixed_tickbase < DoubletapFix && vars.ragebot.improvespeed) {
-				csgo->cmd->viewangles = Math::CalculateAngle(csgo->local->GetEyePosition(), current_aim_position);
-				csgo->cmd->viewangles -= csgo->local->GetPunchAngle() * interfaces.cvars->FindVar(str("weapon_recoil_scale"))->GetFloat();
-				csgo->cmd->buttons |= IN_ATTACK;
-			}
-		}
+		//auto max_tickbase_shift = (vars.ragebot.more_ticks && csgo->weapon->isSniper()) ? vars.ragebot.dt_tickammount : csgo->weapon->GetMaxTickbaseShift();
+		//if (g_Binds[bind_double_tap].active && !g_Binds[bind_peek_assist].active && max_tickbase_shift >= 12) {
+		//	if (csgo->fixed_tickbase < DoubletapFix && vars.ragebot.improvespeed) {
+		//		csgo->cmd->viewangles = Math::CalculateAngle(csgo->local->GetEyePosition(), current_aim_position);
+		//		csgo->cmd->viewangles -= csgo->local->GetPunchAngle() * interfaces.cvars->FindVar(str("weapon_recoil_scale"))->GetFloat();
+		//		csgo->cmd->buttons |= IN_ATTACK;
+		//	}
+		//}
 	}
 	if (is_able_to_shoot && csgo->cmd->buttons & IN_ATTACK && !is_revolver)
 		shot = true;
